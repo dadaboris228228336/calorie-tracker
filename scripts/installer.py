@@ -61,7 +61,8 @@ def kill_existing() -> bool:
 
 def launch_app():
     """Запускает основное приложение."""
-    subprocess.Popen([sys.executable.replace("python.exe", "pythonw.exe"), "main.py"])
+    root_dir = Path(__file__).parent.parent
+    subprocess.Popen([sys.executable.replace("python.exe", "pythonw.exe"), str(root_dir / "main.py")])
     sys.exit(0)
 
 
