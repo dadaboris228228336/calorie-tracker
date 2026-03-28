@@ -2,6 +2,7 @@
 import subprocess
 import sys
 import importlib
+import os
 from pathlib import Path
 
 # Зависимости: (import_name, pip_name, отображаемое_имя)
@@ -16,7 +17,6 @@ def is_installed(import_name: str) -> bool:
     """Проверяет установлен ли пакет корректно."""
     try:
         if import_name == "PyQt6":
-            # Проверяем именно QtCore — основной модуль
             importlib.import_module("PyQt6.QtCore")
         else:
             importlib.import_module(import_name)
@@ -30,11 +30,43 @@ def get_missing() -> list[tuple[str, str, str]]:
     return [(imp, pip, name) for imp, pip, name in DEPS if not is_installed(imp)]
 
 
+def kill_existing() -> bool:
+    """Завершает уже запущенный экземпляр приложения. Возвращает True если был найден."""
+    try:
+        import psutil
+    except ImportError:
+        # psutil не установлен — пробуем через taskkill
+        result = subprocess.run(
+            ["taskkill", "/F", "/IM", "pythonw.exe", "/FI", "WINDOWTITLE eq *Calorie*"],
+            capture_output=True
+        )
+        return result.returncode == 0
+
+    killed = False
+    current_pid = os.getpid()
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if proc.pid == current_pid:
+                continue
+            cmdline = proc.info.get("cmdline") or []
+            # Ищем процессы python/pythonw которые запускают main.py или installer.py
+            if any("main.py" in arg for arg in cmdline):
+                proc.terminate()
+                proc.wait(timeout=3)
+                killed = True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+            pass
+    return killed
+
+
 def launch_app():
     """Запускает основное приложение."""
-    subprocess.Popen([sys.executable, "main.py"])
+    subprocess.Popen([sys.executable.replace("python.exe", "pythonw.exe"), "main.py"])
     sys.exit(0)
 
+
+# Если приложение уже запущено — закрываем его
+kill_existing()
 
 # Если всё установлено — сразу запускаем приложение
 missing = get_missing()

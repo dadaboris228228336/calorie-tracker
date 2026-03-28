@@ -1,6 +1,9 @@
 # GUI
 PyQt6>=6.4.0
 
+# Утилиты
+psutil>=5.9
+
 # Тесты
 pytest>=7.0
 hypothesis>=6.0

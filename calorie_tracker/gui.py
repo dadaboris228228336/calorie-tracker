@@ -45,6 +45,9 @@ QWidget {{
     font-family: 'Segoe UI', Arial, sans-serif;
     font-size: 13px;
 }}
+QLabel {{
+    background-color: transparent;
+}}
 QPushButton {{
     background-color: {ACCENT};
     color: white;
@@ -85,7 +88,7 @@ QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
 }}
 QListWidget {{
     background-color: {CARD_BG};
-    border: 1px solid {BORDER};
+    border: 1px solid {ACCENT};
     border-radius: 8px;
     padding: 4px;
 }}
@@ -102,7 +105,7 @@ QListWidget::item:hover {{
     background-color: {PANEL_BG};
 }}
 QTabWidget::pane {{
-    border: 1px solid {BORDER};
+    border: 1px solid {ACCENT};
     border-radius: 8px;
     background-color: {PANEL_BG};
 }}
@@ -121,21 +124,25 @@ QLabel#title {{
     font-size: 22px;
     font-weight: bold;
     color: {TEXT_PRIMARY};
+    background-color: transparent;
 }}
 QLabel#subtitle {{
     font-size: 14px;
     color: {TEXT_MUTED};
+    background-color: transparent;
 }}
 QLabel#card_title {{
     font-size: 13px;
     font-weight: bold;
     color: {TEXT_MUTED};
     text-transform: uppercase;
+    background-color: transparent;
 }}
 QLabel#value {{
     font-size: 28px;
     font-weight: bold;
     color: {TEXT_PRIMARY};
+    background-color: transparent;
 }}
 QProgressBar {{
     background-color: {CARD_BG};
@@ -149,9 +156,9 @@ QProgressBar::chunk {{
     border-radius: 6px;
 }}
 QFrame#card {{
-    background-color: {CARD_BG};
+    background-color: #3a3a55;
     border-radius: 12px;
-    border: 1px solid {BORDER};
+    border: 1px solid {ACCENT};
 }}
 QScrollArea {{
     border: none;
@@ -1294,21 +1301,29 @@ class ProfileTab(QWidget):
         }
         sex = "Мужской" if profile.male else "Женский"
 
-        # Список строк: (название, значение)
+        # Список строк: (название, значение, цвет_названия, цвет_значения)
         rows = [
-            ("Вес",           f"{profile.weight_kg} кг"),
-            ("Рост",          f"{profile.height_cm} см"),
-            ("Возраст",       f"{profile.age} лет"),
-            ("Пол",           sex),
-            ("Активность",    act_names[profile.activity]),
-            ("Цель",          goal_names[profile.goal]),
-            ("Норма калорий", f"{goal_kcal} ккал/день"),
+            ("Вес",           f"{profile.weight_kg} кг",    "#7dd3fc", "#7dd3fc"),
+            ("Рост",          f"{profile.height_cm} см",    "#86efac", "#86efac"),
+            ("Возраст",       f"{profile.age} лет",         "#fcd34d", "#fcd34d"),
+            ("Пол",           sex,                          "#f9a8d4", "#f9a8d4"),
+            ("Активность",    act_names[profile.activity],  "#c4b5fd", "#c4b5fd"),
+            ("Цель",          goal_names[profile.goal],     WARNING,   WARNING),
+            ("Норма калорий", f"{goal_kcal} ккал/день",     SUCCESS,   SUCCESS),
         ]
-        for title, val in rows:
+        for title, val, title_color, val_color in rows:
             row_w = QHBoxLayout()
-            row_w.addWidget(label(title, "card_title"))
+            title_lbl = QLabel(title.upper())
+            title_lbl.setStyleSheet(
+                f"font-size: 11px; font-weight: bold; color: {title_color}; letter-spacing: 1px;"
+            )
+            val_lbl = QLabel(val)
+            val_lbl.setStyleSheet(
+                f"font-size: 13px; font-weight: bold; color: {val_color};"
+            )
+            row_w.addWidget(title_lbl)
             row_w.addStretch()
-            row_w.addWidget(label(val))
+            row_w.addWidget(val_lbl)
             self._info_layout.addLayout(row_w)
             self._info_layout.addWidget(hline())
 
@@ -1391,6 +1406,9 @@ def run_app() -> int:
     """Создаёт приложение, показывает окно и запускает главный цикл событий."""
     app = QApplication(sys.argv)  # QApplication должен быть создан до любых виджетов
     app.setStyle("Fusion")        # стиль Fusion — одинаково выглядит на всех ОС
+    # Segoe UI Emoji — шрифт Windows с поддержкой эмодзи, убирает чёрные квадраты
+    font = QFont("Segoe UI Emoji", 10)
+    app.setFont(font)
     window = MainWindow()
     window.show()                 # показываем окно
     return app.exec()             # запускаем цикл событий (блокирует до закрытия окна)
