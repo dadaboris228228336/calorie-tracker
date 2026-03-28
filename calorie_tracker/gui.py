@@ -939,15 +939,88 @@ class TodayTab(QWidget):
                 QMessageBox.warning(self, "Ошибка", str(e))
 
 
+# ── Диалог просмотра записей за день ─────────────────────────────────────────
+
+class DayDetailDialog(QDialog):
+    """Всплывающее окно с подробной статистикой за выбранный день."""
+
+    def __init__(self, day: date, tracker: CalorieTracker, storage: JsonStorage, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"📅  {day.strftime('%d %B %Y')}")
+        self.setMinimumWidth(420)
+        self.setMinimumHeight(320)
+        self.setStyleSheet(STYLE)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # Заголовок
+        layout.addWidget(label(f"📅  {day.strftime('%d %B %Y')}", "title"))
+        layout.addWidget(hline())
+
+        # Загружаем данные
+        stats = tracker.get_day_stats(day)
+        profile = storage.load_profile()
+
+        # Карточки: съедено / цель / осталось
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(8)
+
+        def mini_card(title: str, value: str, color: str = TEXT_PRIMARY) -> QFrame:
+            f = card()
+            lay = QVBoxLayout(f)
+            lay.setContentsMargins(12, 8, 12, 8)
+            lay.setSpacing(2)
+            lay.addWidget(label(title, "card_title"))
+            val_lbl = label(value, "value")
+            val_lbl.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {color};")
+            lay.addWidget(val_lbl)
+            return f
+
+        cards_row.addWidget(mini_card("🔥 Съедено", f"{stats.total} ккал"))
+
+        if profile:
+            goal_kcal = tracker.get_goal_calories(profile)
+            remaining = goal_kcal - stats.total
+            cards_row.addWidget(mini_card("🎯 Цель", f"{goal_kcal} ккал"))
+            color = SUCCESS if remaining >= 0 else DANGER
+            rem_text = f"{remaining} ккал" if remaining >= 0 else f"−{abs(remaining)} ккал"
+            cards_row.addWidget(mini_card("✅ Осталось", rem_text, color))
+        else:
+            cards_row.addWidget(mini_card("🎯 Цель", "нет профиля"))
+
+        layout.addLayout(cards_row)
+        layout.addWidget(hline())
+
+        # Список записей
+        layout.addWidget(label("Приёмы пищи:", "card_title"))
+        lst = QListWidget()
+        if not stats.entries:
+            item = QListWidgetItem("  Записей нет")
+            item.setForeground(QColor(TEXT_MUTED))
+            lst.addItem(item)
+        else:
+            for e in stats.entries:
+                lst.addItem(f"  {e.timestamp.strftime('%H:%M')}   {e.name}   —   {e.calories} ккал")
+        layout.addWidget(lst)
+
+        # Кнопка закрыть
+        close_btn = QPushButton("Закрыть")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+
 # ── Вкладка "Статистика" ──────────────────────────────────────────────────────
 
 class StatsTab(QWidget):
-    """Вкладка со статистикой за неделю / месяц / год."""
+    """Вкладка со статистикой за неделю / месяц / год. Клик на день — детали."""
 
     def __init__(self, storage: JsonStorage, parent=None):
         super().__init__(parent)
         self._storage = storage
         self._tracker = CalorieTracker(storage)
+        self._dates: list[date] = []  # список дат соответствующих строкам списка
         self._build_ui()
 
     def _build_ui(self):
@@ -964,59 +1037,98 @@ class StatsTab(QWidget):
         for text, period in [("Неделя", "week"), ("Месяц", "month"), ("Год", "year")]:
             btn = QPushButton(text)
             btn.setObjectName("secondary")
-            # lambda с захватом p=period — иначе все кнопки будут использовать последнее значение
             btn.clicked.connect(lambda _, p=period: self._show_period(p))
             self._period_btns.append(btn)
             period_row.addWidget(btn)
         period_row.addStretch()
         root.addLayout(period_row)
 
-        self._result_list = QListWidget()  # список строк с данными
+        hint = label("💡 Нажмите на день чтобы увидеть подробности", "subtitle")
+        root.addWidget(hint)
+
+        self._result_list = QListWidget()
+        # Двойной клик или одиночный — открываем детали дня
+        self._result_list.itemDoubleClicked.connect(self._on_day_clicked)
+        self._result_list.itemClicked.connect(self._on_day_clicked)
         root.addWidget(self._result_list)
 
-        self._total_lbl = label("", "subtitle")  # строка "Итого: X | Среднее: Y"
-        root.addWidget(self._total_lbl)
+        # Итоговая карточка — две колонки: Итого и Среднее
+        self._summary_card = card()
+        self._summary_card.setStyleSheet(
+            f"background-color: {ACCENT}; border-radius: 12px; border: none;"
+        )
+        summary_lay = QHBoxLayout(self._summary_card)
+        summary_lay.setContentsMargins(20, 12, 20, 12)
+        summary_lay.setSpacing(0)
 
-        self._show_period("week")  # по умолчанию показываем неделю
+        self._total_lbl = QLabel("—")
+        self._total_lbl.setStyleSheet(
+            f"font-size: 15px; font-weight: bold; color: {TEXT_PRIMARY};"
+        )
+        self._avg_lbl = QLabel("—")
+        self._avg_lbl.setStyleSheet(
+            f"font-size: 15px; font-weight: bold; color: #ffffff;"
+        )
+        self._avg_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+        summary_lay.addWidget(self._total_lbl)
+        summary_lay.addStretch()
+        summary_lay.addWidget(self._avg_lbl)
+        root.addWidget(self._summary_card)
+
+        self._show_period("week")
+
+    def _on_day_clicked(self, item: QListWidgetItem):
+        """Открывает диалог с деталями дня при клике на строку."""
+        row = self._result_list.row(item)
+        if row < 0 or row >= len(self._dates):
+            return
+        day = self._dates[row]
+        # Для года кликаем на месяц — показываем статистику месяца
+        if not isinstance(day, date):
+            return
+        dlg = DayDetailDialog(day, self._tracker, self._storage, self)
+        dlg.exec()
 
     def _show_period(self, period: str):
         """Загружает и отображает статистику за выбранный период."""
         self._result_list.clear()
+        self._dates = []
         try:
             if period == "week":
                 stats = self._tracker.get_week_stats()
                 days_ru = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
                 for d, cal in stats.days.items():
-                    wd = days_ru[d.weekday()]  # weekday(): 0=пн, 6=вс
-                    item = QListWidgetItem(f"  {wd}  {d.strftime('%d.%m')}   —   {cal} ккал")
-                    if cal == 0:
-                        item.setForeground(QColor(TEXT_MUTED))  # серый для пустых дней
-                    self._result_list.addItem(item)
-                self._total_lbl.setText(
-                    f"Итого: {stats.total} ккал  |  Среднее: {stats.daily_average:.0f} ккал/день"
-                )
-            elif period == "month":
-                stats = self._tracker.get_month_stats()
-                for d, cal in stats.days.items():
-                    item = QListWidgetItem(f"  {d.strftime('%d %b')}   —   {cal} ккал")
+                    wd = days_ru[d.weekday()]
+                    item = QListWidgetItem(f"  {wd}  {d.strftime('%d.%m')}   —   {cal} ккал  🔍")
                     if cal == 0:
                         item.setForeground(QColor(TEXT_MUTED))
                     self._result_list.addItem(item)
-                self._total_lbl.setText(
-                    f"Итого: {stats.total} ккал  |  Среднее: {stats.daily_average:.0f} ккал/день"
-                )
+                    self._dates.append(d)
+                self._total_lbl.setText(f"🔥 Итого: {stats.total} ккал")
+                self._avg_lbl.setText(f"Среднее: {stats.daily_average:.0f} ккал/день")
+            elif period == "month":
+                stats = self._tracker.get_month_stats()
+                for d, cal in stats.days.items():
+                    item = QListWidgetItem(f"  {d.strftime('%d %b')}   —   {cal} ккал  🔍")
+                    if cal == 0:
+                        item.setForeground(QColor(TEXT_MUTED))
+                    self._result_list.addItem(item)
+                    self._dates.append(d)
+                self._total_lbl.setText(f"🔥 Итого: {stats.total} ккал")
+                self._avg_lbl.setText(f"Среднее: {stats.daily_average:.0f} ккал/день")
             elif period == "year":
                 stats = self._tracker.get_year_stats()
                 months_ru = ["Январь","Февраль","Март","Апрель","Май","Июнь",
                              "Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"]
+                today = date.today()
                 for m, cal in stats.months.items():
                     item = QListWidgetItem(f"  {months_ru[m-1]}   —   {cal} ккал")
                     if cal == 0:
                         item.setForeground(QColor(TEXT_MUTED))
                     self._result_list.addItem(item)
-                self._total_lbl.setText(
-                    f"Итого: {stats.total} ккал  |  Среднее: {stats.monthly_average:.0f} ккал/месяц"
-                )
+                    self._dates.append(date(today.year, m, 1))
+                self._total_lbl.setText(f"🔥 Итого: {stats.total} ккал")
+                self._avg_lbl.setText(f"Среднее: {stats.monthly_average:.0f} ккал/месяц")
         except StorageError as e:
             QMessageBox.warning(self, "Ошибка", str(e))
 
