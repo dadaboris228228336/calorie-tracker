@@ -1,4 +1,4 @@
-"""Тесты для модуля vision.py (распознавание еды через Ollama LLaVA)."""
+"""Тесты для модуля vision.py (распознавание еды через LM Studio / Ollama)."""
 from __future__ import annotations
 
 import json
@@ -14,7 +14,6 @@ from calorie_tracker.vision import recognize_food
 
 def _make_image(tmp_dir: str) -> Path:
     """Создаёт минимальный PNG-файл для тестов."""
-    # 1x1 белый PNG (минимальный валидный файл)
     png_bytes = (
         b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01'
         b'\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00'
@@ -24,6 +23,19 @@ def _make_image(tmp_dir: str) -> Path:
     p = Path(tmp_dir) / "test.png"
     p.write_bytes(png_bytes)
     return p
+
+
+def _mock_lmstudio_response(items: list[dict]) -> MagicMock:
+    """Создаёт mock HTTP-ответа от LM Studio (формат OpenAI)."""
+    content = json.dumps(items)
+    response_body = json.dumps({
+        "choices": [{"message": {"content": content}}]
+    }).encode("utf-8")
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = response_body
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    return mock_resp
 
 
 def _mock_ollama_response(items: list[dict]) -> MagicMock:
@@ -36,6 +48,14 @@ def _mock_ollama_response(items: list[dict]) -> MagicMock:
     return mock_resp
 
 
+def _make_mock(items: list[dict]) -> MagicMock:
+    """Создаёт mock в зависимости от текущего BACKEND."""
+    from calorie_tracker.vision import BACKEND
+    if BACKEND == "lmstudio":
+        return _mock_lmstudio_response(items)
+    return _mock_ollama_response(items)
+
+
 # ── Unit-тесты ────────────────────────────────────────────────────────────────
 
 def test_recognize_food_file_not_found():
@@ -45,11 +65,11 @@ def test_recognize_food_file_not_found():
 
 
 def test_recognize_food_returns_items():
-    """recognize_food возвращает список блюд при успешном ответе Ollama."""
+    """recognize_food возвращает список блюд при успешном ответе."""
     with tempfile.TemporaryDirectory() as tmp:
         img = _make_image(tmp)
         items = [{"name": "Овсянка", "calories": 350}, {"name": "Кофе", "calories": 80}]
-        mock_resp = _mock_ollama_response(items)
+        mock_resp = _make_mock(items)
         with patch("urllib.request.urlopen", return_value=mock_resp):
             result = recognize_food(img)
     assert len(result) == 2
@@ -63,7 +83,7 @@ def test_recognize_food_empty_response():
     """recognize_food возвращает [] если модель вернула пустой массив."""
     with tempfile.TemporaryDirectory() as tmp:
         img = _make_image(tmp)
-        mock_resp = _mock_ollama_response([])
+        mock_resp = _make_mock([])
         with patch("urllib.request.urlopen", return_value=mock_resp):
             result = recognize_food(img)
     assert result == []
@@ -71,9 +91,15 @@ def test_recognize_food_empty_response():
 
 def test_recognize_food_no_json_in_response():
     """recognize_food возвращает [] если ответ не содержит JSON-массива."""
+    from calorie_tracker.vision import BACKEND
     with tempfile.TemporaryDirectory() as tmp:
         img = _make_image(tmp)
-        response_body = json.dumps({"response": "Я не вижу еды на фото."}).encode("utf-8")
+        if BACKEND == "lmstudio":
+            response_body = json.dumps({
+                "choices": [{"message": {"content": "Я не вижу еды на фото."}}]
+            }).encode("utf-8")
+        else:
+            response_body = json.dumps({"response": "Я не вижу еды на фото."}).encode("utf-8")
         mock_resp = MagicMock()
         mock_resp.read.return_value = response_body
         mock_resp.__enter__ = lambda s: s
@@ -83,13 +109,13 @@ def test_recognize_food_no_json_in_response():
     assert result == []
 
 
-def test_recognize_food_ollama_unavailable():
-    """recognize_food бросает TrackerError если Ollama недоступна."""
+def test_recognize_food_server_unavailable():
+    """recognize_food бросает TrackerError если сервер недоступен."""
     import urllib.error
     with tempfile.TemporaryDirectory() as tmp:
         img = _make_image(tmp)
         with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("connection refused")):
-            with pytest.raises(TrackerError, match="Ollama"):
+            with pytest.raises(TrackerError):
                 recognize_food(img)
 
 
@@ -99,11 +125,11 @@ def test_recognize_food_filters_invalid_items():
         img = _make_image(tmp)
         items = [
             {"name": "Суп", "calories": 200},
-            {"name": "Без калорий"},          # нет calories — пропускается
-            {"calories": 100},                 # нет name — пропускается
+            {"name": "Без калорий"},
+            {"calories": 100},
             {"name": "Салат", "calories": 150},
         ]
-        mock_resp = _mock_ollama_response(items)
+        mock_resp = _make_mock(items)
         with patch("urllib.request.urlopen", return_value=mock_resp):
             result = recognize_food(img)
     assert len(result) == 2
@@ -113,10 +139,17 @@ def test_recognize_food_filters_invalid_items():
 
 def test_recognize_food_calories_are_int():
     """recognize_food приводит calories к int."""
+    from calorie_tracker.vision import BACKEND
     with tempfile.TemporaryDirectory() as tmp:
         img = _make_image(tmp)
-        # Модель может вернуть строку вместо числа
-        response_body = json.dumps({"response": '[{"name": "Хлеб", "calories": "120"}]'}).encode("utf-8")
+        if BACKEND == "lmstudio":
+            response_body = json.dumps({
+                "choices": [{"message": {"content": '[{"name": "Хлеб", "calories": "120"}]'}}]
+            }).encode("utf-8")
+        else:
+            response_body = json.dumps(
+                {"response": '[{"name": "Хлеб", "calories": "120"}]'}
+            ).encode("utf-8")
         mock_resp = MagicMock()
         mock_resp.read.return_value = response_body
         mock_resp.__enter__ = lambda s: s
