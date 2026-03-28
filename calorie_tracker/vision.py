@@ -27,16 +27,19 @@ API_URL  = "http://localhost:1234/v1/chat/completions"
 MODEL    = "moondream-2b-2025-04-14-4bit"
 
 _PROMPT = (
-    "На этом фото еда. Определи все блюда и продукты, которые видишь. "
-    "Для каждого блюда укажи примерное количество калорий. "
-    "Ответь ТОЛЬКО в формате JSON-массива, без пояснений:\n"
-    '[{"name": "Название блюда", "calories": 350}, ...]\n'
-    "Если еды не видно — верни пустой массив []."
+    "You are a nutrition assistant. Look at this food image carefully. "
+    "List all food items you see with their estimated calories. "
+    "Respond ONLY with a valid JSON array, no explanations:\n"
+    '[{"name": "Apple", "calories": 80}, ...]\n'
+    "If no food is visible, return empty array: []"
 )
 
 
 def _parse_items(raw_text: str) -> list[dict]:
     """Извлекает JSON-массив блюд из текста ответа модели."""
+    # Убираем markdown блоки ```json ... ```
+    raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+
     start = raw_text.find("[")
     end = raw_text.rfind("]") + 1
     if start == -1 or end == 0:
@@ -44,9 +47,12 @@ def _parse_items(raw_text: str) -> list[dict]:
     try:
         items = json.loads(raw_text[start:end])
         return [
-            {"name": str(item["name"]), "calories": int(item["calories"])}
+            {
+                "name": str(item.get("name", item.get("food", ""))),
+                "calories": int(item.get("calories", item.get("kcal", 0)))
+            }
             for item in items
-            if "name" in item and "calories" in item
+            if ("name" in item or "food" in item) and ("calories" in item or "kcal" in item)
         ]
     except (json.JSONDecodeError, KeyError, ValueError):
         return []
