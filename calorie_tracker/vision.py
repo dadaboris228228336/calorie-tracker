@@ -24,7 +24,7 @@ from calorie_tracker.models import TrackerError
 
 BACKEND = "lmstudio"        # "ollama" или "lmstudio"
 API_URL  = "http://localhost:1234/v1/chat/completions"
-MODEL    = "ggml_bakllava-1"
+MODEL    = "moondream-2b-2025-04-14-4bit"
 
 _PROMPT = (
     "На этом фото еда. Определи все блюда и продукты, которые видишь. "

@@ -1341,6 +1341,171 @@ class ProfileTab(QWidget):
                 QMessageBox.warning(self, "Ошибка", str(e))
 
 
+# ── Вкладка "База продуктов" ──────────────────────────────────────────────────
+
+class FoodDBTab(QWidget):
+    """Вкладка: выбор продукта из базы + ввод граммов → автоматический расчёт калорий."""
+
+    def __init__(self, storage: JsonStorage, today_tab: "TodayTab", parent=None):
+        super().__init__(parent)
+        self._storage   = storage
+        self._tracker   = CalorieTracker(storage)
+        self._today_tab = today_tab
+        self._db        = self._load_db()
+        self._filtered  = self._db
+        self._selected: dict | None = None
+        self._build_ui()
+
+    def _load_db(self) -> list[dict]:
+        import json
+        from pathlib import Path
+        db_path = Path(__file__).parent / "food_db.json"
+        if not db_path.exists():
+            return []
+        return json.loads(db_path.read_text(encoding="utf-8"))
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setSpacing(16)
+        root.setContentsMargins(20, 20, 20, 20)
+
+        root.addWidget(label("🥦  База продуктов", "title"))
+        root.addWidget(label("Выберите продукт, укажите граммы — калории посчитаются автоматически", "subtitle"))
+        root.addWidget(hline())
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Поиск продукта...")
+        self._search.textChanged.connect(self._filter_list)
+        root.addWidget(self._search)
+
+        self._list = QListWidget()
+        self._list.setMaximumHeight(220)
+        self._list.itemClicked.connect(self._on_select)
+        self._fill_list(self._db)
+        root.addWidget(self._list)
+
+        root.addWidget(hline())
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self._selected_lbl = QLabel("—")
+        self._selected_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {ACCENT};")
+        form.addRow("Продукт:", self._selected_lbl)
+
+        self._kcal_lbl = QLabel("— ккал/100г")
+        self._kcal_lbl.setStyleSheet(f"font-size: 13px; color: {TEXT_MUTED};")
+        form.addRow("Калорийность:", self._kcal_lbl)
+
+        self._grams = QSpinBox()
+        self._grams.setRange(1, 9999)
+        self._grams.setValue(100)
+        self._grams.setSuffix(" г")
+        self._grams.valueChanged.connect(self._update_result)
+        form.addRow("Количество:", self._grams)
+
+        root.addLayout(form)
+
+        result_card = card()
+        result_lay = QHBoxLayout(result_card)
+        result_lay.setContentsMargins(20, 12, 20, 12)
+        self._result_lbl = QLabel("0 ккал")
+        self._result_lbl.setStyleSheet(f"font-size: 26px; font-weight: bold; color: {SUCCESS};")
+        result_lay.addWidget(label("Итого:", "card_title"))
+        result_lay.addStretch()
+        result_lay.addWidget(self._result_lbl)
+        root.addWidget(result_card)
+
+        add_btn = QPushButton("＋ Добавить в дневник")
+        add_btn.clicked.connect(self._add_to_diary)
+        root.addWidget(add_btn)
+
+        custom_btn = QPushButton("+ Добавить свой продукт в базу")
+        custom_btn.setObjectName("secondary")
+        custom_btn.clicked.connect(self._add_custom_product)
+        root.addWidget(custom_btn)
+
+    def _fill_list(self, items: list[dict]):
+        self._list.clear()
+        for item in items:
+            self._list.addItem(f"  {item['name']}  —  {item['kcal_per_100g']} ккал/100г")
+
+    def _filter_list(self, text: str):
+        self._filtered = [p for p in self._db if text.lower() in p["name"].lower()]
+        self._fill_list(self._filtered)
+
+    def _on_select(self, item: QListWidgetItem):
+        row = self._list.row(item)
+        if row < 0 or row >= len(self._filtered):
+            return
+        self._selected = self._filtered[row]
+        self._selected_lbl.setText(self._selected["name"])
+        self._kcal_lbl.setText(f"{self._selected['kcal_per_100g']} ккал/100г")
+        self._update_result()
+
+    def _update_result(self):
+        if not self._selected:
+            return
+        kcal = round(self._selected["kcal_per_100g"] * self._grams.value() / 100)
+        self._result_lbl.setText(f"{kcal} ккал")
+
+    def _add_to_diary(self):
+        if not self._selected:
+            QMessageBox.information(self, "Выбор", "Сначала выберите продукт из списка.")
+            return
+        grams = self._grams.value()
+        kcal  = round(self._selected["kcal_per_100g"] * grams / 100)
+        name  = f"{self._selected['name']} ({grams}г)"
+        try:
+            self._tracker.add_entry(name, kcal)
+            self._today_tab.refresh()
+            QMessageBox.information(self, "Добавлено", f"{name} — {kcal} ккал")
+        except TrackerError as e:
+            QMessageBox.warning(self, "Ошибка", str(e))
+
+    def _add_custom_product(self):
+        import json
+        from pathlib import Path
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Добавить продукт")
+        dlg.setMinimumWidth(340)
+        dlg.setStyleSheet(STYLE)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(20, 20, 20, 20)
+        lay.setSpacing(10)
+        lay.addWidget(label("Новый продукт", "title"))
+        form = QFormLayout()
+        name_edit = QLineEdit()
+        name_edit.setPlaceholderText("Название продукта")
+        kcal_spin = QSpinBox()
+        kcal_spin.setRange(0, 9999)
+        kcal_spin.setSuffix(" ккал/100г")
+        form.addRow("Название:", name_edit)
+        form.addRow("Калорийность:", kcal_spin)
+        lay.addLayout(form)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save |
+            QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            name = name_edit.text().strip()
+            if not name:
+                QMessageBox.warning(self, "Ошибка", "Введите название продукта.")
+                return
+            new_item = {"name": name, "kcal_per_100g": kcal_spin.value()}
+            self._db.append(new_item)
+            self._filtered = self._db
+            db_path = Path(__file__).parent / "food_db.json"
+            db_path.write_text(
+                json.dumps(self._db, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            self._fill_list(self._db)
+            QMessageBox.information(self, "Готово", f"Продукт «{name}» добавлен в базу.")
+
+
 # ── Главное окно ──────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
@@ -1372,32 +1537,32 @@ class MainWindow(QMainWindow):
         h_lay.addStretch()
         root.addWidget(header)
 
-        # Создаём все четыре вкладки
+        # Создаём все пять вкладок
         tabs = QTabWidget()
-        tabs.setDocumentMode(True)  # убирает рамку вокруг вкладок
+        tabs.setDocumentMode(True)
 
         self._today_tab   = TodayTab(self._storage)
         self._stats_tab   = StatsTab(self._storage)
+        self._food_tab    = FoodDBTab(self._storage, self._today_tab)
         self._photo_tab   = PhotoTab(self._storage, self._today_tab)
         self._profile_tab = ProfileTab(self._storage, self._today_tab)
 
         tabs.addTab(self._today_tab,   "📅  Сегодня")
         tabs.addTab(self._stats_tab,   "📊  Статистика")
+        tabs.addTab(self._food_tab,    "🥦  Продукты")
         tabs.addTab(self._photo_tab,   "📷  Фото AI")
         tabs.addTab(self._profile_tab, "👤  Профиль")
 
-        # currentChanged — сигнал который срабатывает при переключении вкладки
         tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(tabs)
 
     def _on_tab_changed(self, idx: int):
-        """Обновляет данные при переключении на вкладку."""
         if idx == 0:
-            self._today_tab.refresh()    # "Сегодня" — перечитываем записи
+            self._today_tab.refresh()
         elif idx == 1:
-            self._stats_tab._show_period("week")  # "Статистика" — показываем неделю
-        elif idx == 3:
-            self._profile_tab.refresh()  # "Профиль" — перечитываем профиль
+            self._stats_tab._show_period("week")
+        elif idx == 4:
+            self._profile_tab.refresh()
 
 
 # ── Точка входа ───────────────────────────────────────────────────────────────
